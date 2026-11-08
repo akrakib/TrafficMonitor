@@ -1,0 +1,4 @@
+PySide6>=6.6
+psutil>=5.9
+# Only needed to build the .exe:
+pyinstaller>=6.0
