@@ -1,4 +1,4 @@
-# TrafficMonitor  `v1.0.0`
+# TrafficMonitor  `v1.0.1`
 
 A lightweight, fully customizable glassmorphism network-speed widget for Windows 10/11.
 It shows **real** download/upload speed (updated every second), total and daily usage, connection status

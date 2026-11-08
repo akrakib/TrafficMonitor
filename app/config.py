@@ -38,7 +38,7 @@ _BASE = {
     **{f"show_{k}": True for k, _ in STATS},
     "brand_visible": True, "brand_name": "TrafficMonitor",
     "brand_subtitle": "LIVE TRAFFIC", "brand_align": "left",
-    "always_on_top": True, "start_with_windows": False,
+    "always_on_top": True, "start_with_windows": True,
     "locked": False, "start_minimized": False,
     "icon_path": "", "icon_size": 26, "auto_text_color": True, "transparent_bg": True,
 }

@@ -40,10 +40,17 @@ class MonitorWidget(QWidget):
 
         self._apply_timer = QTimer(self, singleShot=True, interval=25, timeout=self._apply)
         self._native_timer = QTimer(self, singleShot=True, interval=0, timeout=self._apply_native)
-        self._top_timer = QTimer(self, interval=3000, timeout=self._keep_on_top)
+        self._top_n = 0
+        self._top_timer = QTimer(self, interval=250, timeout=self._keep_on_top)
         self._top_timer.start()
         settings.changed.connect(self._on_setting)
         self._apply(initial=True)
+        # taskbar click -> taskbar jumps above us: lift the widget again immediately
+        winutils.watch_foreground(lambda: QTimer.singleShot(40, self._on_foreground))
+        # at logon the taskbar may not exist yet: re-place when the work area changes / shortly after start
+        for sc in QGuiApplication.screens():
+            sc.availableGeometryChanged.connect(lambda *_: self._apply_timer.start())
+        QTimer.singleShot(6000, self._apply_timer.start)
 
     # ---------- settings -> view ----------
     def _on_setting(self, key):
@@ -332,13 +339,23 @@ class MonitorWidget(QWidget):
         super().resizeEvent(e)
         self._native_timer.start()
 
-    def _keep_on_top(self):
-        light = winutils.taskbar_is_light()
-        if light != self._light:                 # Windows theme switched
-            self._light = light
-            self._apply_timer.start()
+    def _on_foreground(self):
+        if self.isVisible():
+            winutils.debug_state(int(self.winId()), "foreground changed")
+        self._raise()
+
+    def _raise(self):
         if self.s["always_on_top"] and self.isVisible():
             winutils.bring_topmost(int(self.winId()))
+
+    def _keep_on_top(self):
+        self._top_n += 1
+        if self._top_n % 12 == 0:                # theme check about every 3 s
+            light = winutils.taskbar_is_light()
+            if light != self._light:             # Windows theme switched
+                self._light = light
+                self._apply_timer.start()
+        self._raise()
 
     # ---------- placement ----------
     def _on_screen(self, x, y):

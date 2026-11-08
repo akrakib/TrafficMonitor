@@ -31,6 +31,15 @@ if IS_WIN:
     gdi32.CreateRoundRectRgn.argtypes = [ctypes.c_int] * 6
     gdi32.CreateRoundRectRgn.restype = wintypes.HANDLE
     user32.SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND] + [ctypes.c_int] * 4 + [wintypes.UINT]
+    user32.FindWindowW.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR]
+    user32.FindWindowW.restype = wintypes.HWND
+    user32.GetWindow.argtypes = [wintypes.HWND, wintypes.UINT]
+    user32.GetWindow.restype = wintypes.HWND
+    user32.GetForegroundWindow.argtypes = []
+    user32.GetForegroundWindow.restype = wintypes.HWND
+    user32.GetClassNameW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+    user32.GetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int]
+    user32.GetWindowLongW.restype = ctypes.c_long
 
 
 def set_blur(hwnd, enable, rgb, alpha):
@@ -66,13 +75,94 @@ def clear_region(hwnd):
             pass
 
 
+_raise_logged = 0
+_debug_left = 40
+log.info("winutils loaded: topmost-fix v2 (diagnostic)")
+
+
+def debug_state(hwnd, tag):
+    """Diagnostic: log which window is in front and whether the taskbar is above the widget (first 40 times)."""
+    global _debug_left
+    if not IS_WIN or _debug_left <= 0:
+        return
+    _debug_left -= 1
+    try:
+        fg = user32.GetForegroundWindow()
+        buf = ctypes.create_unicode_buffer(128)
+        user32.GetClassNameW(fg, buf, 128)
+        ex = user32.GetWindowLongW(int(hwnd), -20)
+        log.info("%s: foreground=%s widget_topmost=%s taskbar_above_widget=%s",
+                 tag, buf.value, bool(ex & 0x8), _taskbar_above(int(hwnd)))
+    except Exception:
+        log.exception("debug_state failed")
+
+
+def _taskbar_above(hwnd):
+    """True if a taskbar window sits above hwnd in the z-order (i.e. it is covering the widget)."""
+    bars = set()
+    for cls in ("Shell_TrayWnd", "Shell_SecondaryTrayWnd"):
+        h = user32.FindWindowW(cls, None)
+        if h:
+            bars.add(int(h))
+    if not bars:
+        return True                      # no taskbar found: just keep asserting TOPMOST
+    h, n = user32.GetWindow(hwnd, 3), 0  # GW_HWNDPREV = the window directly above us
+    while h and n < 200:
+        if int(h) in bars:
+            return True
+        h, n = user32.GetWindow(h, 3), n + 1
+    return False
+
+
 def bring_topmost(hwnd):
-    """Re-assert TOPMOST (the taskbar can steal z-order). NOSIZE|NOMOVE|NOACTIVATE|SHOWWINDOW."""
-    if IS_WIN:
-        try:
-            user32.SetWindowPos(int(hwnd), wintypes.HWND(-1), 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010 | 0x0040)
-        except Exception:
-            pass
+    """Lift the widget above the taskbar again when the taskbar has been clicked.
+    A plain SetWindowPos(HWND_TOPMOST) is ignored for a window that is already topmost, so when the taskbar
+    really is above us we drop TOPMOST first and set it again, which forces a fresh z-order position."""
+    global _raise_logged
+    if not IS_WIN:
+        return
+    try:
+        flags = 0x0001 | 0x0002 | 0x0010 | 0x0040        # NOSIZE|NOMOVE|NOACTIVATE|SHOWWINDOW
+        if not _taskbar_above(int(hwnd)):
+            return
+        if _raise_logged < 5:
+            _raise_logged += 1
+            log.info("Taskbar was above the widget; re-raising it")
+        user32.SetWindowPos(int(hwnd), wintypes.HWND(-2), 0, 0, 0, 0, flags)   # HWND_NOTOPMOST
+        user32.SetWindowPos(int(hwnd), wintypes.HWND(-1), 0, 0, 0, 0, flags)   # HWND_TOPMOST
+    except Exception:
+        log.exception("bring_topmost failed")
+
+
+_hook = None
+_hook_proc = None
+
+
+def watch_foreground(callback):
+    """Call callback() whenever the foreground window changes (e.g. the taskbar was clicked).
+    Runs on the Qt thread (needs the Qt message loop). Used to lift the widget above the taskbar again."""
+    global _hook, _hook_proc
+    if not IS_WIN or _hook:
+        return False
+    try:
+        PROC = ctypes.WINFUNCTYPE(None, wintypes.HANDLE, wintypes.DWORD, wintypes.HWND,
+                                  wintypes.LONG, wintypes.LONG, wintypes.DWORD, wintypes.DWORD)
+
+        def _cb(*_args):
+            try:
+                callback()
+            except Exception:
+                pass
+        _hook_proc = PROC(_cb)          # keep a reference or it gets garbage-collected
+        user32.SetWinEventHook.restype = wintypes.HANDLE
+        user32.SetWinEventHook.argtypes = [wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE, PROC,
+                                           wintypes.DWORD, wintypes.DWORD, wintypes.DWORD]
+        # EVENT_SYSTEM_FOREGROUND = 0x0003, WINEVENT_OUTOFCONTEXT = 0
+        _hook = user32.SetWinEventHook(0x0003, 0x0003, None, _hook_proc, 0, 0, 0)
+        return bool(_hook)
+    except Exception:
+        log.exception("watch_foreground failed")
+        return False
 
 
 def _startup_command():
